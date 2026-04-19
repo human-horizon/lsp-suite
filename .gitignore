@@ -1,0 +1,14 @@
+# Binary executables
+/*-lsp
+/*lsp
+
+# OS
+.DS_Store
+
+# Build artifacts
+vendor/
+node_modules/
+
+# Temporary
+*.tmp
+*.bak
