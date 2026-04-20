@@ -1,6 +1,5 @@
-# Binary executables (files only)
-/*-lsp
-/*lsp
+# Binary executables and build output
+dist/
 
 # OS
 .DS_Store
