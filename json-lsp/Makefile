@@ -1,22 +1,15 @@
-CXX = zig c++
-CXXFLAGS = -Wall -Wextra -O2 -g -std=c++17
+CC = zig cc
+CFLAGS = -Wall -Wextra -O2
 
-SRC = src/main.cpp src/lsp.cpp src/json-parser.cpp src/simdjson.cpp
-OBJ = $(SRC:.cpp=.o)
-BIN = json-lsp
+SRC = src/main.c
+OUT = json-lsp
 
-.PHONY: all clean install
+.PHONY: all clean
 
-all: $(BIN)
+all: $(OUT)
 
-$(BIN): $(OBJ)
-	$(CXX) $(OBJ) -o $@
-
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+$(OUT): $(SRC)
+	$(CC) $(CFLAGS) $(SRC) -o $(OUT)
 
 clean:
-	rm -f src/*.o $(BIN)
-
-install: $(BIN)
-	cp $(BIN) /usr/local/bin/
+	rm -f $(OUT)

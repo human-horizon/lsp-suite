@@ -31,7 +31,7 @@ lsp-suite/
 
 | LSP | Language | Parser | Status |
 |-----|----------|--------|--------|
-| json-lsp | C++ | simdjson | ✅ Works |
+| json-lsp | C | manual parsing | ✅ Works |
 | c-lsp | C | TCC parser | ✅ Works |
 | html-lsp | C | tree-sitter | ✅ Works |
 | css-lsp | C | tree-sitter | ✅ Works |
