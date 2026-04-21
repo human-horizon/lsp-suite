@@ -2,14 +2,15 @@ CC = zig cc
 CFLAGS = -Wall -Wextra -O2
 
 SRC = src/main.c
-OUT = json-lsp
+OUT = dist/json-lsp
 
 .PHONY: all clean
 
 all: $(OUT)
 
 $(OUT): $(SRC)
+	mkdir -p dist
 	$(CC) $(CFLAGS) $(SRC) -o $(OUT)
 
 clean:
-	rm -f $(OUT)
+	rm -rf dist

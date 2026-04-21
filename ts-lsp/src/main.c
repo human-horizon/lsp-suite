@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
         }
 
         if (strcmp(method, "initialize") == 0) {
-            const char *result = "{\"capabilities\":{\"textDocument\":{\"documentSymbol\":{\"hierarchicalDocumentSymbolSupport\":true},\"hoverProvider\":true}},\"serverInfo\":{\"name\":\"ts-lsp\",\"version\":\"0.1.0\"}}";
+            const char *result = "{\"capabilities\":{\"textDocument\":{\"documentSymbol\":{\"hierarchicalDocumentSymbolSupport\":true},\"hoverProvider\":true,\"definitionProvider\":true}},\"serverInfo\":{\"name\":\"ts-lsp\",\"version\":\"0.1.0\"}}";
             send_response(id, result);
         } else if (strcmp(method, "textDocument/documentSymbol") == 0) {
             const char *uri = strstr(body, "\"uri\"");
@@ -342,7 +342,28 @@ int main(int argc, char** argv) {
             free(source);
             source = NULL;
         } else if (strcmp(method, "textDocument/hover") == 0) {
-            send_response(id, "{\"contents\":{\"kind\":\"markdown\",\"value\":\"TypeScript symbol\"}}");
+            if (use_oxc && current_symbols.count > 0) {
+                char result[512];
+                snprintf(result, sizeof(result),
+                    "{\"contents\":{\"kind\":\"markdown\",\"value\":\"**%s** (%s)\\n\\nKind: %d\"}}",
+                    current_symbols.symbols[0].name ? current_symbols.symbols[0].name : "symbol",
+                    kind_to_name(current_symbols.symbols[0].kind),
+                    current_symbols.symbols[0].kind);
+                send_response(id, result);
+            } else {
+                send_response(id, "{\"contents\":{\"kind\":\"markdown\",\"value\":\"TypeScript symbol\"}}");
+            }
+        } else if (strcmp(method, "textDocument/definition") == 0) {
+            if (use_oxc && current_symbols.count > 0) {
+                char result[256];
+                snprintf(result, sizeof(result),
+                    "[{\"uri\":\"\",\"range\":{\"start\":{\"line\":0,\"character\":%u},\"end\":{\"line\":0,\"character\":%u}}}]",
+                    current_symbols.symbols[0].start,
+                    current_symbols.symbols[0].end);
+                send_response(id, result);
+            } else {
+                send_response(id, "[]");
+            }
         } else if (strcmp(method, "shutdown") == 0) {
             send_response(id, "null");
             break;
