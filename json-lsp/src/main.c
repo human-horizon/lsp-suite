@@ -251,8 +251,11 @@ static void parse_json_symbols(const char *content) {
 }
 
 static void send_response(const char *id, const char *result) {
-    printf("Content-Length: %zu\r\n\r\n", strlen(result));
-    printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}", id, result);
+    char resp[8192];
+    int len = snprintf(resp, sizeof(resp),
+        "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}", id ? id : "null", result);
+    printf("Content-Length: %d\r\n\r\n", len);
+    printf("%s", resp);
     fflush(stdout);
 }
 

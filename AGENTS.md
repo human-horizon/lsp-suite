@@ -6,7 +6,7 @@ Suite of Language Server (LSP) implementations for Vision code visualization.
 
 ```
 lsp-suite/
-├── AGENTS.md              # This file
+├── AGENTS.md             # This file
 ├── json-lsp/             # JSON LSP (C++ + simdjson)
 ├── c-lsp/                # C LSP (TCC parser)
 ├── html-lsp/             # HTML LSP (C + tree-sitter)

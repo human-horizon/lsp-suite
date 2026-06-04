@@ -21,8 +21,11 @@ static CssSymbol symbols[256];
 static int symbol_count = 0;
 
 void send_response(const char *id, const char *result) {
-    printf("Content-Length: %zu\r\n\r\n", strlen(result));
-    printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}", id, result);
+    char resp[8192];
+    int len = snprintf(resp, sizeof(resp),
+        "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}", id ? id : "null", result);
+    printf("Content-Length: %d\r\n\r\n", len);
+    printf("%s", resp);
     fflush(stdout);
 }
 
@@ -36,11 +39,11 @@ void send_error(const char *id, int code, const char *message) {
     fflush(stdout);
 }
 
-void extract_symbols(TSNode node) {
+void extract_symbols(TSNode node, const TSLanguage *lang) {
     if (symbol_count >= 256) return;
 
     TSSymbol sym = ts_node_symbol(node);
-    const char *name = ts_language_symbol_name(ts_parser_language(parser), sym);
+    const char *name = ts_language_symbol_name(lang, sym);
 
     if (strcmp(name, "rule_set") == 0 ||
         strcmp(name, "declaration") == 0 ||
@@ -58,7 +61,7 @@ void extract_symbols(TSNode node) {
 
     unsigned int child_count = ts_node_child_count(node);
     for (unsigned int i = 0; i < child_count; i++) {
-        extract_symbols(ts_node_child(node, i));
+        extract_symbols(ts_node_child(node, i), lang);
     }
 }
 
@@ -75,8 +78,8 @@ const char* parse_string(const char *s, char *out, int max_len) {
         if (*s == '\\') s++;
         out[i++] = *s++;
     }
-    out[i] = '\0';
     if (*s == '"') s++;
+    out[i] = '\0';
     return s;
 }
 
@@ -93,9 +96,14 @@ static void skip_value(const char **s) {
         int depth = 1;
         (*s)++;
         while (**s && depth > 0) {
-            if (**s == '{') depth++;
-            else if (**s == '}') depth--;
-            else if (**s == '"') {
+            if (**s == '{') {
+                depth++;
+                (*s)++;
+            } else if (**s == '}') {
+                depth--;
+                if (depth == 0) { (*s)++; break; }
+                (*s)++;
+            } else if (**s == '"') {
                 (*s)++;
                 while (**s && **s != '"') {
                     if (**s == '\\') (*s)++;
@@ -110,9 +118,14 @@ static void skip_value(const char **s) {
         int depth = 1;
         (*s)++;
         while (**s && depth > 0) {
-            if (**s == '[') depth++;
-            else if (**s == ']') depth--;
-            else if (**s == '"') {
+            if (**s == '[') {
+                depth++;
+                (*s)++;
+            } else if (**s == ']') {
+                depth--;
+                if (depth == 0) { (*s)++; break; }
+                (*s)++;
+            } else if (**s == '"') {
                 (*s)++;
                 while (**s && **s != '"') {
                     if (**s == '\\') (*s)++;
@@ -125,6 +138,8 @@ static void skip_value(const char **s) {
         }
     } else if (**s >= '0' && **s <= '9') {
         while (**s >= '0' && **s <= '9') (*s)++;
+    } else {
+        (*s)++;
     }
 }
 
@@ -256,7 +271,7 @@ int main() {
                 symbol_count = 0;
                 TSTree *tree = ts_parser_parse_string(parser, NULL, source, strlen(source));
                 TSNode root = ts_tree_root_node(tree);
-                extract_symbols(root);
+                extract_symbols(root, tree_sitter_css());
 
                 char result[8192] = "[";
                 for (int i = 0; i < symbol_count; i++) {

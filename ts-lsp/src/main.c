@@ -1,35 +1,13 @@
 /**
  * ts-lsp - TypeScript Language Server
- * Uses tree-sitter for fast outline/highlighting
- * Uses oxc for detailed symbol analysis (when needed)
+ * Uses tree-sitter-typescript for parsing
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <tree_sitter/api.h>
-
-typedef struct {
-    const char* name;
-    unsigned char kind;
-    unsigned char padding[3];
-    unsigned int start;
-    unsigned int end;
-} OxcSymbol;
-
-typedef struct {
-    OxcSymbol* symbols;
-    unsigned long count;
-} OxcSymbols;
-
-OxcSymbols oxc_parse_ts(const char* source);
-void oxc_free_symbols(OxcSymbols* symbols);
-
-const TSLanguage *tree_sitter_typescript(void);
-
-static TSParser *tree_parser = NULL;
-static OxcSymbols current_symbols = {NULL, 0};
-static int use_oxc = 0;
+#include "tree-sitter-typescript.h"
 
 typedef struct {
     const char *name;
@@ -41,33 +19,18 @@ typedef struct {
 static Symbol symbols[256];
 static int symbol_count = 0;
 
-void send_response(const char *id, const char *result) {
-    printf("Content-Length: %zu\r\n\r\n", strlen(result));
-    printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}", id, result);
-    fflush(stdout);
-}
-
-void send_error(const char *id, int code, const char *message) {
-    char resp[512];
-    snprintf(resp, sizeof(resp),
-        "{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":%d,\"message\":\"%s\"}}",
-        id, code, message);
-    printf("Content-Length: %zu\r\n\r\n", strlen(resp));
-    printf("%s", resp);
-    fflush(stdout);
-}
-
-void extract_symbols_tree(TSNode node) {
+void extract_symbols_tree(TSNode node, const TSLanguage *lang) {
     if (symbol_count >= 256) return;
 
     TSSymbol sym = ts_node_symbol(node);
-    const char *name = ts_language_symbol_name(ts_parser_language(tree_parser), sym);
+    const char *name = ts_language_symbol_name(lang, sym);
 
     if (strcmp(name, "function_declaration") == 0 ||
         strcmp(name, "class_declaration") == 0 ||
         strcmp(name, "interface_declaration") == 0 ||
-        strcmp(name, "type_alias") == 0 ||
-        strcmp(name, "enum_declaration") == 0) {
+        strcmp(name, "type_alias_declaration") == 0 ||
+        strcmp(name, "enum_declaration") == 0 ||
+        strcmp(name, "module_declaration") == 0) {
 
         unsigned int start = ts_node_start_byte(node);
         unsigned int end = ts_node_end_byte(node);
@@ -81,8 +44,27 @@ void extract_symbols_tree(TSNode node) {
 
     unsigned int child_count = ts_node_child_count(node);
     for (unsigned int i = 0; i < child_count; i++) {
-        extract_symbols_tree(ts_node_child(node, i));
+        extract_symbols_tree(ts_node_child(node, i), lang);
     }
+}
+
+void send_response(const char *id, const char *result) {
+    char resp[8192];
+    int len = snprintf(resp, sizeof(resp),
+        "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}", id ? id : "null", result);
+    printf("Content-Length: %d\r\n\r\n", len);
+    printf("%s", resp);
+    fflush(stdout);
+}
+
+void send_error(const char *id, int code, const char *message) {
+    char resp[512];
+    snprintf(resp, sizeof(resp),
+        "{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":%d,\"message\":\"%s\"}}",
+        id, code, message);
+    printf("Content-Length: %zu\r\n\r\n", strlen(resp));
+    printf("%s", resp);
+    fflush(stdout);
 }
 
 const char* skip_ws(const char *s) {
@@ -98,8 +80,8 @@ const char* parse_string(const char *s, char *out, int max_len) {
         if (*s == '\\') s++;
         out[i++] = *s++;
     }
-    out[i] = '\0';
     if (*s == '"') s++;
+    out[i] = '\0';
     return s;
 }
 
@@ -116,8 +98,8 @@ static void skip_value(const char **s) {
         int depth = 1;
         (*s)++;
         while (**s && depth > 0) {
-            if (**s == '{') depth++;
-            else if (**s == '}') depth--;
+            if (**s == '{') { depth++; (*s)++; }
+            else if (**s == '}') { depth--; if (depth == 0) { (*s)++; break; } (*s)++; }
             else if (**s == '"') {
                 (*s)++;
                 while (**s && **s != '"') {
@@ -133,8 +115,8 @@ static void skip_value(const char **s) {
         int depth = 1;
         (*s)++;
         while (**s && depth > 0) {
-            if (**s == '[') depth++;
-            else if (**s == ']') depth--;
+            if (**s == '[') { depth++; (*s)++; }
+            else if (**s == ']') { depth--; if (depth == 0) { (*s)++; break; } (*s)++; }
             else if (**s == '"') {
                 (*s)++;
                 while (**s && **s != '"') {
@@ -148,30 +130,14 @@ static void skip_value(const char **s) {
         }
     } else if (**s >= '0' && **s <= '9') {
         while (**s >= '0' && **s <= '9') (*s)++;
-    }
-}
-
-const char* kind_to_name(int kind) {
-    switch (kind) {
-        case 1: return "function";
-        case 2: return "arrow";
-        case 3: return "class";
-        case 4: return "variable";
-        case 5: return "method";
-        case 6: return "module";
-        case 7: return "enum";
-        case 8: return "interface";
-        case 9: return "type";
-        default: return "unknown";
+    } else {
+        (*s)++;
     }
 }
 
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
-
-    tree_parser = ts_parser_new();
-    ts_parser_set_language(tree_parser, tree_sitter_typescript());
 
     char header[256];
     char *body = NULL;
@@ -294,76 +260,38 @@ int main(int argc, char** argv) {
             if (!source) {
                 send_error(id, -32602, "File not found");
             } else {
-                if (use_oxc) {
-                    if (current_symbols.symbols) {
-                        oxc_free_symbols(&current_symbols);
-                    }
-                    current_symbols = oxc_parse_ts(source);
+                symbol_count = 0;
+                TSParser *parser = ts_parser_new();
+                ts_parser_set_language(parser, tree_sitter_typescript());
+                TSTree *tree = ts_parser_parse_string(parser, NULL, source, strlen(source));
+                const TSLanguage *lang = tree_sitter_typescript();
+                TSNode root = ts_tree_root_node(tree);
+                extract_symbols_tree(root, lang);
 
-                    char result[8192] = "[";
-                    for (unsigned long i = 0; i < current_symbols.count; i++) {
-                        char entry[512];
-                        const char* kind_name = kind_to_name(current_symbols.symbols[i].kind);
-                        snprintf(entry, sizeof(entry),
-                            "%s{\"name\":\"%s\",\"kind\":%d,\"location\":{\"uri\":\"\",\"range\":{\"start\":{\"line\":0,\"character\":%u},\"end\":{\"line\":0,\"character\":%u}}}}",
-                            i > 0 ? "," : "",
-                            current_symbols.symbols[i].name ? current_symbols.symbols[i].name : kind_name,
-                            current_symbols.symbols[i].kind,
-                            current_symbols.symbols[i].start,
-                            current_symbols.symbols[i].end);
-                        strcat(result, entry);
-                    }
-                    strcat(result, "]");
-                    send_response(id, result);
-                } else {
-                    symbol_count = 0;
-                    TSTree *tree = ts_parser_parse_string(tree_parser, NULL, source, strlen(source));
-                    TSNode root = ts_tree_root_node(tree);
-                    extract_symbols_tree(root);
-
-                    char result[8192] = "[";
-                    for (int i = 0; i < symbol_count; i++) {
-                        char entry[256];
-                        snprintf(entry, sizeof(entry),
-                            "%s{\"name\":\"%s\",\"kind\":%d,\"location\":{\"uri\":\"\",\"range\":{\"start\":{\"line\":0,\"character\":%u},\"end\":{\"line\":0,\"character\":%u}}}}",
-                            i > 0 ? "," : "",
-                            symbols[i].name,
-                            symbols[i].kind,
-                            symbols[i].start_byte,
-                            symbols[i].end_byte);
-                        strcat(result, entry);
-                    }
-                    strcat(result, "]");
-
-                    send_response(id, result);
-                    ts_tree_delete(tree);
+                char result[8192] = "[";
+                for (int i = 0; i < symbol_count; i++) {
+                    char entry[256];
+                    snprintf(entry, sizeof(entry),
+                        "%s{\"name\":\"%s\",\"kind\":%d,\"location\":{\"uri\":\"\",\"range\":{\"start\":{\"line\":0,\"character\":%u},\"end\":{\"line\":0,\"character\":%u}}}}",
+                        i > 0 ? "," : "",
+                        symbols[i].name,
+                        symbols[i].kind,
+                        symbols[i].start_byte,
+                        symbols[i].end_byte);
+                    strcat(result, entry);
                 }
+                strcat(result, "]");
+
+                send_response(id, result);
+                ts_tree_delete(tree);
+                ts_parser_delete(parser);
             }
             free(source);
             source = NULL;
         } else if (strcmp(method, "textDocument/hover") == 0) {
-            if (use_oxc && current_symbols.count > 0) {
-                char result[512];
-                snprintf(result, sizeof(result),
-                    "{\"contents\":{\"kind\":\"markdown\",\"value\":\"**%s** (%s)\\n\\nKind: %d\"}}",
-                    current_symbols.symbols[0].name ? current_symbols.symbols[0].name : "symbol",
-                    kind_to_name(current_symbols.symbols[0].kind),
-                    current_symbols.symbols[0].kind);
-                send_response(id, result);
-            } else {
-                send_response(id, "{\"contents\":{\"kind\":\"markdown\",\"value\":\"TypeScript symbol\"}}");
-            }
+            send_response(id, "{\"contents\":{\"kind\":\"markdown\",\"value\":\"TypeScript symbol\"}}");
         } else if (strcmp(method, "textDocument/definition") == 0) {
-            if (use_oxc && current_symbols.count > 0) {
-                char result[256];
-                snprintf(result, sizeof(result),
-                    "[{\"uri\":\"\",\"range\":{\"start\":{\"line\":0,\"character\":%u},\"end\":{\"line\":0,\"character\":%u}}}]",
-                    current_symbols.symbols[0].start,
-                    current_symbols.symbols[0].end);
-                send_response(id, result);
-            } else {
-                send_response(id, "[]");
-            }
+            send_response(id, "[]");
         } else if (strcmp(method, "shutdown") == 0) {
             send_response(id, "null");
             break;
@@ -371,11 +299,7 @@ int main(int argc, char** argv) {
     }
 
 cleanup:
-    if (current_symbols.symbols) {
-        oxc_free_symbols(&current_symbols);
-    }
     free(body);
     free(source);
-    ts_parser_delete(tree_parser);
     return 0;
 }
